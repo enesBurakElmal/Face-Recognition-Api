@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "start:dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "aenesthor": "",
@@ -23,9 +22,6 @@
     "npm-bundle": "^3.0.3",
     "pg": "^8.0.3",
     "systemd": "^0.4.0"
-  },
-  "devDependencies": {
-    "nodemon": "^2.0.15"
   },
   "description": ""
 }
