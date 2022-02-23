@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "dev": "react-scripts start",
+    "start": "serve -s build",
+    "build": "react-scripts build",
+    "test": "react-scripts test --env=jsdom",
+    "eject": "react-scripts eject",
+    "heroku-postbuild": "npm run build"
   },
   "keywords": [],
   "aenesthor": "",
@@ -21,6 +26,7 @@
     "knex": "^1.0.3",
     "npm-bundle": "^3.0.3",
     "pg": "^8.0.3",
+    "serve": "^13.0.2",
     "systemd": "^0.4.0"
   },
   "description": ""
