@@ -4,397 +4,522 @@
 // columns and changing datatypes.
 // -------
 
+const assign = require('lodash/assign');
+const chunk = require('lodash/chunk');
+const find = require('lodash/find');
+const fromPairs = require('lodash/fromPairs');
 const identity = require('lodash/identity');
-const { nanonum } = require('../../../util/nanoid');
-const {
-  copyData,
-  dropOriginal,
-  renameTable,
-  getTableSql,
-  isForeignCheckEnabled,
-  setForeignCheck,
-  executeForeignCheck,
-} = require('./internal/sqlite-ddl-operations');
-const { parseCreateTable, parseCreateIndex } = require('./internal/parser');
-const {
-  compileCreateTable,
-  compileCreateIndex,
-} = require('./internal/compiler');
-const { isEqualId, includesId } = require('./internal/utils');
+const invert = require('lodash/invert');
+const isEmpty = require('lodash/isEmpty');
+const negate = require('lodash/negate');
+const omit = require('lodash/omit');
+const uniqueId = require('lodash/uniqueId');
+const { COMMA_NO_PAREN_REGEX } = require('../../../constants');
 
 // So altering the schema in SQLite3 is a major pain.
 // We have our own object to deal with the renaming and altering the types
 // for sqlite3 things.
-class SQLite3_DDL {
-  constructor(client, tableCompiler, pragma, connection) {
-    this.client = client;
-    this.tableCompiler = tableCompiler;
-    this.pragma = pragma;
-    this.tableNameRaw = this.tableCompiler.tableNameRaw;
-    this.alteredName = `_knex_temp_alter${nanonum(3)}`;
-    this.connection = connection;
-    this.formatter = (value) =>
-      this.client.customWrapIdentifier(value, identity);
-    this.wrap = (value) => this.client.wrapIdentifierImpl(value);
-  }
+function SQLite3_DDL(client, tableCompiler, pragma, connection) {
+  this.client = client;
+  this.tableCompiler = tableCompiler;
+  this.pragma = pragma;
+  this.tableNameRaw = this.tableCompiler.tableNameRaw;
+  this.alteredName = uniqueId('_knex_temp_alter');
+  this.connection = connection;
+  this.formatter =
+    client && client.config && client.config.wrapIdentifier
+      ? client.config.wrapIdentifier
+      : (value) => value;
+}
 
+assign(SQLite3_DDL.prototype, {
   tableName() {
-    return this.formatter(this.tableNameRaw);
-  }
+    return this.formatter(this.tableNameRaw, (value) => value);
+  },
+
+  getColumn: async function (column) {
+    const currentCol = find(this.pragma, (col) => {
+      return (
+        this.client.wrapIdentifier(col.name).toLowerCase() ===
+        this.client.wrapIdentifier(column).toLowerCase()
+      );
+    });
+    if (!currentCol)
+      throw new Error(
+        `The column ${column} is not in the ${this.tableName()} table`
+      );
+    return currentCol;
+  },
 
   getTableSql() {
-    const tableName = this.tableName();
+    this.trx.disableProcessing();
+    return this.trx
+      .raw(
+        `SELECT name, sql FROM sqlite_master WHERE type="table" AND name="${this.tableName()}"`
+      )
+      .then((result) => {
+        this.trx.enableProcessing();
+        return result;
+      });
+  },
 
-    return this.client.transaction(
-      async (trx) => {
-        trx.disableProcessing();
-        const result = await trx.raw(getTableSql(tableName));
-        trx.enableProcessing();
-
-        return {
-          createTable: result.filter((create) => create.type === 'table')[0]
-            .sql,
-          createIndices: result
-            .filter((create) => create.type === 'index')
-            .map((create) => create.sql),
-        };
-      },
-      { connection: this.connection }
+  renameTable: async function () {
+    return this.trx.raw(
+      `ALTER TABLE "${this.tableName()}" RENAME TO "${this.alteredName}"`
     );
-  }
+  },
 
-  async isForeignCheckEnabled() {
-    const result = await this.client
-      .raw(isForeignCheckEnabled())
-      .connection(this.connection);
+  dropOriginal() {
+    return this.trx.raw(`DROP TABLE "${this.tableName()}"`);
+  },
 
-    return result[0].foreign_keys === 1;
-  }
+  dropTempTable() {
+    return this.trx.raw(`DROP TABLE "${this.alteredName}"`);
+  },
 
-  async setForeignCheck(enable) {
-    await this.client.raw(setForeignCheck(enable)).connection(this.connection);
-  }
+  copyData() {
+    return this.trx
+      .raw(`SELECT * FROM "${this.tableName()}"`)
+      .then((result) =>
+        this.insertChunked(20, this.alteredName, identity, result)
+      );
+  },
 
-  renameTable(trx) {
-    return trx.raw(renameTable(this.alteredName, this.tableName()));
-  }
+  reinsertData(iterator) {
+    return this.trx
+      .raw(`SELECT * FROM "${this.alteredName}"`)
+      .then((result) =>
+        this.insertChunked(20, this.tableName(), iterator, result)
+      );
+  },
 
-  dropOriginal(trx) {
-    return trx.raw(dropOriginal(this.tableName()));
-  }
+  async insertChunked(chunkSize, target, iterator, result) {
+    iterator = iterator || identity;
+    const chunked = chunk(result, chunkSize);
+    for (const batch of chunked) {
+      await this.trx.queryBuilder().table(target).insert(batch.map(iterator));
+    }
+  },
 
-  copyData(trx, columns) {
-    return trx.raw(copyData(this.tableName(), this.alteredName, columns));
-  }
+  createTempTable(createTable) {
+    return this.trx.raw(
+      createTable.sql.replace(this.tableName(), this.alteredName)
+    );
+  },
 
-  async alterColumn(columns) {
-    const { createTable, createIndices } = await this.getTableSql();
+  _doReplace(sql, from, to) {
+    const oneLineSql = sql.replace(/\s+/g, ' ');
+    const matched = oneLineSql.match(/^CREATE TABLE\s+(\S+)\s*\((.*)\)/);
 
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
+    const tableName = matched[1];
+    const defs = matched[2];
 
-    parsedTable.columns = parsedTable.columns.map((column) => {
-      const newColumnInfo = columns.find((c) => isEqualId(c.name, column.name));
+    if (!defs) {
+      throw new Error('No column definitions in this statement!');
+    }
 
-      if (newColumnInfo) {
-        column.type = newColumnInfo.type;
+    let parens = 0,
+      args = [],
+      ptr = 0;
+    let i = 0;
+    const x = defs.length;
+    for (i = 0; i < x; i++) {
+      switch (defs[i]) {
+        case '(':
+          parens++;
+          break;
+        case ')':
+          parens--;
+          break;
+        case ',':
+          if (parens === 0) {
+            args.push(defs.slice(ptr, i));
+            ptr = i + 1;
+          }
+          break;
+        case ' ':
+          if (ptr === i) {
+            ptr = i + 1;
+          }
+          break;
+      }
+    }
+    args.push(defs.slice(ptr, i));
 
-        column.constraints.default =
-          newColumnInfo.defaultTo !== null
-            ? {
-                name: null,
-                value: newColumnInfo.defaultTo,
-                expression: false,
-              }
-            : null;
+    const fromIdentifier = from.replace(/[`"'[\]]/g, '');
 
-        column.constraints.notnull = newColumnInfo.notNull
-          ? { name: null, conflict: null }
-          : null;
+    args = args.map((item) => {
+      let split = item.trim().split(' ');
 
-        column.constraints.null = newColumnInfo.notNull
-          ? null
-          : column.constraints.null;
+      // SQLite supports all quoting mechanisms prevalent in all major dialects of SQL
+      // and preserves the original quoting in sqlite_master.
+      //
+      // Also, identifiers are never case sensitive, not even when quoted.
+      //
+      // Ref: https://www.sqlite.org/lang_keywords.html
+      const fromMatchCandidates = [
+        new RegExp(`\`${fromIdentifier}\``, 'i'),
+        new RegExp(`"${fromIdentifier}"`, 'i'),
+        new RegExp(`'${fromIdentifier}'`, 'i'),
+        new RegExp(`\\[${fromIdentifier}\\]`, 'i'),
+      ];
+      if (fromIdentifier.match(/^\S+$/)) {
+        fromMatchCandidates.push(new RegExp(`\\b${fromIdentifier}\\b`, 'i'));
       }
 
-      return column;
+      const doesMatchFromIdentifier = (target) =>
+        fromMatchCandidates.some((c) => target.match(c));
+
+      const replaceFromIdentifier = (target) =>
+        fromMatchCandidates.reduce(
+          (result, candidate) => result.replace(candidate, to),
+          target
+        );
+
+      if (doesMatchFromIdentifier(split[0])) {
+        // column definition
+        if (to) {
+          split[0] = to;
+          return split.join(' ');
+        }
+        return ''; // for deletions
+      }
+
+      // skip constraint name
+      const idx = /constraint/i.test(split[0]) ? 2 : 0;
+
+      // primary key and unique constraints have one or more
+      // columns from this table listed between (); replace
+      // one if it matches
+      if (/primary|unique/i.test(split[idx])) {
+        const ret = item.replace(/\(.*\)/, replaceFromIdentifier);
+        // If any member columns are dropped then uniqueness/pk constraint
+        // can not be retained
+        if (ret !== item && isEmpty(to)) return '';
+        return ret;
+      }
+
+      // foreign keys have one or more columns from this table
+      // listed between (); replace one if it matches
+      // foreign keys also have a 'references' clause
+      // which may reference THIS table; if it does, replace
+      // column references in that too!
+      if (/foreign/.test(split[idx])) {
+        split = item.split(/ references /i);
+        // the quoted column names save us from having to do anything
+        // other than a straight replace here
+        const replacedKeySpec = replaceFromIdentifier(split[0]);
+
+        if (split[0] !== replacedKeySpec) {
+          // If we are removing one or more columns of a foreign
+          // key, then we should not retain the key at all
+          if (isEmpty(to)) return '';
+          else split[0] = replacedKeySpec;
+        }
+
+        if (split[1].slice(0, tableName.length) === tableName) {
+          // self-referential foreign key
+          const replacedKeyTargetSpec = split[1].replace(
+            /\(.*\)/,
+            replaceFromIdentifier
+          );
+          if (split[1] !== replacedKeyTargetSpec) {
+            // If we are removing one or more columns of a foreign
+            // key, then we should not retain the key at all
+            if (isEmpty(to)) return '';
+            else split[1] = replacedKeyTargetSpec;
+          }
+        }
+        return split.join(' references ');
+      }
+
+      return item;
     });
 
-    const newTable = compileCreateTable(parsedTable, this.wrap);
+    args = args.filter(negate(isEmpty));
 
-    return this.generateAlterCommands(newTable, createIndices);
-  }
-
-  async dropColumn(columns) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    parsedTable.columns = parsedTable.columns.filter(
-      (parsedColumn) =>
-        parsedColumn.expression || !includesId(columns, parsedColumn.name)
-    );
-
-    if (parsedTable.columns.length === 0) {
+    if (args.length === 0) {
       throw new Error('Unable to drop last column from table');
     }
 
-    parsedTable.constraints = parsedTable.constraints.filter((constraint) => {
-      if (constraint.type === 'PRIMARY KEY' || constraint.type === 'UNIQUE') {
-        return constraint.columns.every(
-          (constraintColumn) =>
-            constraintColumn.expression ||
-            !includesId(columns, constraintColumn.name)
-        );
-      } else if (constraint.type === 'FOREIGN KEY') {
-        return (
-          constraint.columns.every(
-            (constraintColumnName) => !includesId(columns, constraintColumnName)
-          ) &&
-          (constraint.references.table !== parsedTable.table ||
-            constraint.references.columns.every(
-              (referenceColumnName) => !includesId(columns, referenceColumnName)
-            ))
-        );
-      } else {
-        return true;
-      }
-    });
+    return oneLineSql
+      .replace(/\(.*\)/, () => `(${args.join(', ')})`)
+      .replace(/,\s*([,)])/, '$1');
+  },
 
-    const newColumns = parsedTable.columns.map((column) => column.name);
-
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    const newIndices = [];
-    for (const createIndex of createIndices) {
-      const parsedIndex = parseCreateIndex(createIndex);
-
-      parsedIndex.columns = parsedIndex.columns.filter(
-        (parsedColumn) =>
-          parsedColumn.expression || !includesId(columns, parsedColumn.name)
-      );
-
-      if (parsedIndex.columns.length > 0) {
-        newIndices.push(compileCreateIndex(parsedIndex, this.wrap));
-      }
-    }
-
-    return this.alter(newTable, newIndices, newColumns);
-  }
-
-  async dropForeign(columns, foreignKeyName) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    if (!foreignKeyName) {
-      parsedTable.columns = parsedTable.columns.map((column) => ({
-        ...column,
-        references: includesId(columns, column.name) ? null : column.references,
-      }));
-    }
-
-    parsedTable.constraints = parsedTable.constraints.filter((constraint) => {
-      if (constraint.type === 'FOREIGN KEY') {
-        if (foreignKeyName) {
-          return (
-            !constraint.name || !isEqualId(constraint.name, foreignKeyName)
-          );
+  // Boy, this is quite a method.
+  renameColumn: async function (from, to) {
+    return this.client.transaction(
+      async (trx) => {
+        this.trx = trx;
+        const column = await this.getColumn(from);
+        const sql = await this.getTableSql(column);
+        const a = this.client.wrapIdentifier(from);
+        const b = this.client.wrapIdentifier(to);
+        const createTable = sql[0];
+        const newSql = this._doReplace(createTable.sql, a, b);
+        if (sql === newSql) {
+          throw new Error('Unable to find the column to change');
         }
 
-        return constraint.columns.every(
-          (constraintColumnName) => !includesId(columns, constraintColumnName)
+        const { from: mappedFrom, to: mappedTo } = invert(
+          this.client.postProcessResponse(
+            invert({
+              from,
+              to,
+            })
+          )
         );
-      } else {
-        return true;
-      }
-    });
 
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    return this.alter(newTable, createIndices);
-  }
-
-  async dropPrimary(constraintName) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    parsedTable.columns = parsedTable.columns.map((column) => ({
-      ...column,
-      primary: null,
-    }));
-
-    parsedTable.constraints = parsedTable.constraints.filter((constraint) => {
-      if (constraint.type === 'PRIMARY KEY') {
-        if (constraintName) {
-          return (
-            !constraint.name || !isEqualId(constraint.name, constraintName)
-          );
-        } else {
-          return false;
-        }
-      } else {
-        return true;
-      }
-    });
-
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    return this.alter(newTable, createIndices);
-  }
-
-  async primary(columns, constraintName) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    parsedTable.columns = parsedTable.columns.map((column) => ({
-      ...column,
-      primary: null,
-    }));
-
-    parsedTable.constraints = parsedTable.constraints.filter(
-      (constraint) => constraint.type !== 'PRIMARY KEY'
-    );
-
-    parsedTable.constraints.push({
-      type: 'PRIMARY KEY',
-      name: constraintName || null,
-      columns: columns.map((column) => ({
-        name: column,
-        expression: false,
-        collation: null,
-        order: null,
-      })),
-      conflict: null,
-    });
-
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    return this.alter(newTable, createIndices);
-  }
-
-  async foreign(foreignInfo) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    parsedTable.constraints.push({
-      type: 'FOREIGN KEY',
-      name: foreignInfo.keyName || null,
-      columns: foreignInfo.column,
-      references: {
-        table: foreignInfo.inTable,
-        columns: foreignInfo.references,
-        delete: foreignInfo.onDelete || null,
-        update: foreignInfo.onUpdate || null,
-        match: null,
-        deferrable: null,
+        return this.reinsertMapped(createTable, newSql, (row) => {
+          row[mappedTo] = row[mappedFrom];
+          return omit(row, mappedFrom);
+        });
       },
-    });
-
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    return this.generateAlterCommands(newTable, createIndices);
-  }
-
-  async setNullable(column, isNullable) {
-    const { createTable, createIndices } = await this.getTableSql();
-
-    const parsedTable = parseCreateTable(createTable);
-    parsedTable.table = this.alteredName;
-
-    const parsedColumn = parsedTable.columns.find((c) =>
-      isEqualId(column, c.name)
+      { connection: this.connection }
     );
+  },
 
-    if (!parsedColumn) {
-      throw new Error(
-        `.setNullable: Column ${column} does not exist in table ${this.tableName()}.`
-      );
-    }
-
-    parsedColumn.constraints.notnull = isNullable
-      ? null
-      : { name: null, conflict: null };
-
-    parsedColumn.constraints.null = isNullable
-      ? parsedColumn.constraints.null
-      : null;
-
-    const newTable = compileCreateTable(parsedTable, this.wrap);
-
-    return this.generateAlterCommands(newTable, createIndices);
-  }
-
-  async alter(newSql, createIndices, columns) {
-    const wasForeignCheckEnabled = await this.isForeignCheckEnabled();
-
-    if (wasForeignCheckEnabled) {
-      await this.setForeignCheck(false);
-    }
-
-    try {
-      await this.client.transaction(
-        async (trx) => {
-          await trx.raw(newSql);
-          await this.copyData(trx, columns);
-          await this.dropOriginal(trx);
-          await this.renameTable(trx);
-
-          for (const createIndex of createIndices) {
-            await trx.raw(createIndex);
-          }
-
-          if (wasForeignCheckEnabled) {
-            const foreignViolations = await trx.raw(executeForeignCheck());
-
-            if (foreignViolations.length > 0) {
-              throw new Error('FOREIGN KEY constraint failed');
+  dropColumn: async function (columns) {
+    return this.client.transaction(
+      (trx) => {
+        this.trx = trx;
+        return Promise.all(columns.map((column) => this.getColumn(column)))
+          .then(() => this.getTableSql())
+          .then((sql) => {
+            const createTable = sql[0];
+            let newSql = createTable.sql;
+            columns.forEach((column) => {
+              const a = this.client.wrapIdentifier(column);
+              newSql = this._doReplace(newSql, a, '');
+            });
+            if (sql === newSql) {
+              throw new Error('Unable to find the column to change');
             }
-          }
-        },
-        { connection: this.connection }
-      );
-    } finally {
-      if (wasForeignCheckEnabled) {
-        await this.setForeignCheck(true);
-      }
-    }
-  }
+            const mappedColumns = Object.keys(
+              this.client.postProcessResponse(
+                fromPairs(columns.map((column) => [column, column]))
+              )
+            );
+            return this.reinsertMapped(createTable, newSql, (row) =>
+              omit(row, ...mappedColumns)
+            );
+          });
+      },
+      { connection: this.connection }
+    );
+  },
 
-  async generateAlterCommands(newSql, createIndices, columns) {
-    const sql = [];
-    const pre = [];
-    const post = [];
-    let check = null;
+  dropForeign: async function (columns, indexName) {
+    return this.client.transaction(
+      async (trx) => {
+        this.trx = trx;
 
-    sql.push(newSql);
-    sql.push(copyData(this.tableName(), this.alteredName, columns));
-    sql.push(dropOriginal(this.tableName()));
-    sql.push(renameTable(this.alteredName, this.tableName()));
+        const sql = await this.getTableSql();
 
-    for (const createIndex of createIndices) {
-      sql.push(createIndex);
-    }
+        const createTable = sql[0];
 
-    const isForeignCheckEnabled = await this.isForeignCheckEnabled();
+        const oneLineSql = createTable.sql.replace(/\s+/g, ' ');
+        const matched = oneLineSql.match(/^CREATE TABLE\s+(\S+)\s*\((.*)\)/);
 
-    if (isForeignCheckEnabled) {
-      pre.push(setForeignCheck(false));
-      post.push(setForeignCheck(true));
+        const defs = matched[2];
 
-      check = executeForeignCheck();
-    }
+        if (!defs) {
+          throw new Error('No column definitions in this statement!');
+        }
 
-    return { pre, sql, check, post };
-  }
-}
+        const updatedDefs = defs
+          .split(COMMA_NO_PAREN_REGEX)
+          .map((line) => line.trim())
+          .filter((defLine) => {
+            if (
+              defLine.toLowerCase().startsWith('constraint') === false &&
+              defLine.toLowerCase().includes('foreign key') === false
+            )
+              return true;
+
+            if (indexName) {
+              if (defLine.includes(indexName)) return false;
+              return true;
+            } else {
+              const matched = defLine.match(/\(`(\S+)`\)/);
+              const columnName = matched[1];
+
+              return columns.includes(columnName) === false;
+            }
+          })
+          .join(', ');
+
+        const newSql = oneLineSql.replace(defs, updatedDefs);
+
+        return this.reinsertMapped(createTable, newSql, (row) => {
+          return row;
+        });
+      },
+      { connection: this.connection }
+    );
+  },
+
+  dropPrimary: async function (constraintName) {
+    return this.client.transaction(
+      async (trx) => {
+        this.trx = trx;
+
+        const sql = await this.getTableSql();
+
+        const createTable = sql[0];
+
+        const oneLineSql = createTable.sql.replace(/\s+/g, ' ');
+        const matched = oneLineSql.match(/^CREATE TABLE\s+(\S+)\s*\((.*)\)/);
+
+        const defs = matched[2];
+
+        if (!defs) {
+          throw new Error('No column definitions in this statement!');
+        }
+
+        const updatedDefs = defs
+          .split(COMMA_NO_PAREN_REGEX)
+          .map((line) => line.trim())
+          .filter((defLine) => {
+            if (
+              defLine.startsWith('constraint') === false &&
+              defLine.includes('primary key') === false
+            )
+              return true;
+
+            if (constraintName) {
+              if (defLine.includes(constraintName)) return false;
+              return true;
+            } else {
+              return true;
+            }
+          })
+          .join(', ');
+
+        const newSql = oneLineSql.replace(defs, updatedDefs);
+
+        return this.reinsertMapped(createTable, newSql, (row) => {
+          return row;
+        });
+      },
+      { connection: this.connection }
+    );
+  },
+
+  primary: async function (columns, constraintName) {
+    return this.client.transaction(
+      async (trx) => {
+        this.trx = trx;
+
+        const tableInfo = (await this.getTableSql())[0];
+        const currentSQL = tableInfo.sql;
+
+        const oneLineSQL = currentSQL.replace(/\s+/g, ' ');
+        const matched = oneLineSQL.match(/^CREATE TABLE\s+(\S+)\s*\((.*)\)/);
+
+        const columnDefinitions = matched[2];
+
+        if (!columnDefinitions) {
+          throw new Error('No column definitions in this statement!');
+        }
+
+        const primaryKeyDef = `primary key(${columns.join(',')})`;
+        const constraintDef = constraintName
+          ? `constraint ${constraintName} ${primaryKeyDef}`
+          : primaryKeyDef;
+
+        const newColumnDefinitions = [
+          ...columnDefinitions
+            .split(COMMA_NO_PAREN_REGEX)
+            .map((line) => line.trim())
+            .filter((line) => line.startsWith('primary') === false)
+            .map((line) => line.replace(/primary key/i, '')),
+          constraintDef,
+        ].join(', ');
+
+        const newSQL = oneLineSQL.replace(
+          columnDefinitions,
+          newColumnDefinitions
+        );
+
+        return this.reinsertMapped(tableInfo, newSQL, (row) => {
+          return row;
+        });
+      },
+      { connection: this.connection }
+    );
+  },
+
+  foreign: async function (foreignInfo) {
+    return this.client.transaction(
+      async (trx) => {
+        this.trx = trx;
+
+        const tableInfo = (await this.getTableSql())[0];
+        const currentSQL = tableInfo.sql;
+
+        const oneLineSQL = currentSQL.replace(/\s+/g, ' ');
+        const matched = oneLineSQL.match(/^CREATE TABLE\s+(\S+)\s*\((.*)\)/);
+
+        const columnDefinitions = matched[2];
+
+        if (!columnDefinitions) {
+          throw new Error('No column definitions in this statement!');
+        }
+
+        const newColumnDefinitions = columnDefinitions
+          .split(COMMA_NO_PAREN_REGEX)
+          .map((line) => line.trim());
+
+        let newForeignSQL = '';
+
+        if (foreignInfo.keyName) {
+          newForeignSQL += `CONSTRAINT ${foreignInfo.keyName}`;
+        }
+
+        newForeignSQL += ` FOREIGN KEY (${foreignInfo.column.join(', ')}) `;
+        newForeignSQL += ` REFERENCES ${foreignInfo.inTable} (${foreignInfo.references})`;
+
+        if (foreignInfo.onUpdate) {
+          newForeignSQL += ` ON UPDATE ${foreignInfo.onUpdate}`;
+        }
+
+        if (foreignInfo.onDelete) {
+          newForeignSQL += ` ON DELETE ${foreignInfo.onDelete}`;
+        }
+
+        newColumnDefinitions.push(newForeignSQL);
+
+        const newSQL = oneLineSQL.replace(
+          columnDefinitions,
+          newColumnDefinitions.join(', ')
+        );
+
+        return this.reinsertMapped(tableInfo, newSQL, (row) => {
+          return row;
+        });
+      },
+      { connection: this.connection }
+    );
+  },
+
+  /**
+   * @fixme
+   *
+   * There's a bunch of overlap between renameColumn/dropColumn/dropForeign/primary/foreign.
+   * It'll be helpful to refactor this file heavily to combine/optimize some of these calls
+   */
+
+  reinsertMapped(createTable, newSql, mapRow) {
+    return Promise.resolve()
+      .then(() => this.createTempTable(createTable))
+      .then(() => this.copyData())
+      .then(() => this.dropOriginal())
+      .then(() => this.trx.raw(newSql))
+      .then(() => this.reinsertData(mapRow))
+      .then(() => this.dropTempTable());
+  },
+});
 
 module.exports = SQLite3_DDL;
