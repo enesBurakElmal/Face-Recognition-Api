@@ -8,20 +8,21 @@ const db = knex({
   client: 'pg',
   connection: {
     host: '127.0.0.1',
-    port: 3000,
     user: 'postgres',
-    password: 'can12931993can',
+    password: 'enes',
     database: 'smartbrain',
   },
+  // pool: { min: 0, max: 50 },
+  // debug: true,
 })
 
 const app = express()
 
+app.use(bodyParser.json())
 app.use(cors())
-app.use(express.json())
 
 app.get('/', (req, res) => {
-  res.send(database.users)
+  res.send(db.users)
 })
 
 app.post('/signin', (req, res) => {
@@ -31,6 +32,7 @@ app.post('/signin', (req, res) => {
     .then((data) => {
       const isValid = bcrypt.compareSync(req.body.password, data[0].hash)
       if (isValid) {
+        console.log(isValid)
         return db
           .select('*')
           .from('users')
@@ -61,7 +63,11 @@ app.post('/register', (req, res) => {
         return trx('users')
           .returning('*')
           .insert({
-            email: loginEmail[0].email,
+            // If you are using knex.js version 1.0.0 or higher this now returns an array of objects. Therefore, the code goes from:
+            // loginEmail[0] --> this used to return the email
+            // TO
+            // loginEmail[0].email --> this now returns the email
+            email: loginEmail[0],
             name: name,
             joined: new Date(),
           })
@@ -96,6 +102,10 @@ app.put('/image', (req, res) => {
     .increment('entries', 1)
     .returning('entries')
     .then((entries) => {
+      // If you are using knex.js version 1.0.0 or higher this now returns an array of objects. Therefore, the code goes from:
+      // entries[0] --> this used to return the entries
+      // TO
+      // entries[0].entries --> this now returns the entries
       res.json(entries[0].entries)
     })
     .catch((err) => res.status(400).json('unable to get entries'))
