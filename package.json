@@ -1,25 +1,31 @@
 {
   "name": "node",
   "version": "1.0.0",
-  "main": "script.js",
+  "main": "server.js",
   "scripts": {
-    "start": "nodemon server.js"
+    "start": "node server.js",
+    "start:dev": "nodemon server.js"
   },
   "keywords": [],
   "aenesthor": "",
   "license": "ISC",
   "dependencies": {
+    "@rails/webpacker": "^5.4.3",
+    "apt": "^0.0.2",
     "bcrypt-nodejs": "0.0.3",
     "body-parser": "^1.19.0",
     "clarifai": "^2.9.1",
     "clarify": "^2.1.0",
     "cors": "^2.8.5",
-    "express": "^4.16.2",
+    "express": "^4.17.3",
+    "install": "^0.13.0",
     "knex": "^1.0.3",
-    "pg": "^8.0.3"
+    "npm-bundle": "^3.0.3",
+    "pg": "^8.0.3",
+    "systemd": "^0.4.0"
   },
   "devDependencies": {
-    "nodemon": "^2.0.14"
+    "nodemon": "^2.0.15"
   },
   "description": ""
 }
