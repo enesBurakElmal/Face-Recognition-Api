@@ -1,5 +1,4 @@
 const Clarifai = require('clarifai')
-
 const app = new Clarifai.App({
   apiKey: '222d66483825430fa1f021cfcd3d2432',
 })
@@ -20,7 +19,7 @@ const handleImage = (req, res, db) => {
     .increment('entries', 1)
     .returning('entries')
     .then((entries) => {
-      res.json(entries[0].entries)
+      res.json(entries[0])
     })
     .catch((err) => res.status(400).json('unable to get entries'))
 }
