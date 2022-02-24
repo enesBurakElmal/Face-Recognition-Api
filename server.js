@@ -52,3 +52,17 @@ app.post('/imageurl', (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log(`app is runing on port ${process.env.PORT}`)
 })
+
+// CREATE TABLE login (
+//   id serial PRIMARY KEY,
+//   hash varchar(100) NOT NULL,
+//   email text UNIQUE NOT NULL
+// );
+
+// CREATE TABLE USERS (
+//   id serial PRIMARY KEY,
+//   name VARCHAR(100),
+//   email text UNIQUE NOT NULL,
+//   entries BIGINT DEFAULT 0,
+//   joined TIMESTAMP NOT NULL
+// );
