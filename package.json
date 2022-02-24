@@ -4,8 +4,8 @@
   "engines": {
     "node": "16.14.0"
   },
-  "description": "",
-  "main": "server.js",
+  "description": "face detect api",
+  "main": "index.js",
   "scripts": {
     "start": "node server.js"
   },
