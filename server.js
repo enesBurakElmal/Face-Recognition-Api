@@ -11,8 +11,6 @@ const image = require('./controllers/image')
 
 const PORT = process.env.PORT || '3000'
 
-socket = io.listen(process.env.PORT)
-
 const db = knex({
   client: 'pg',
   connection: {
