@@ -1,5 +1,5 @@
 {
-  "name": "node",
+  "name": "smart-brain-api",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,10 +7,8 @@
   },
   "keywords": [],
   "aenesthor": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
-    "@rails/webpacker": "^5.4.3",
-    "apt": "^0.0.2",
     "bcrypt-nodejs": "0.0.3",
     "body-parser": "^1.19.0",
     "clarifai": "^2.9.1",
@@ -21,9 +19,7 @@
     "install": "^0.13.0",
     "knex": "^0.21.5",
     "npm-bundle": "^3.0.3",
-    "pg": "^8.0.3",
-    "serve": "^13.0.2",
-    "systemd": "^0.4.0"
+    "pg": "^8.0.3"
   },
   "description": ""
 }
