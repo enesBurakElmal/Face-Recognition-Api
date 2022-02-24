@@ -11,13 +11,13 @@ const image = require('./controllers/image')
 
 const PORT = process.env.PORT || '3000'
 
+socket = io.listen(process.env.PORT)
+
 const db = knex({
   client: 'pg',
   connection: {
-    host: '127.0.0.1',
-    user: 'postgres',
-    password: 'enes',
-    database: 'smartbrain',
+    connectionString: process.env.DATABASE_URL,
+    ssl: true,
   },
 })
 

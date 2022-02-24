@@ -1,14 +1,9 @@
 {
   "name": "node",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "dev": "react-scripts start",
-    "start": "serve -s build",
-    "build": "react-scripts build",
-    "test": "react-scripts test --env=jsdom",
-    "eject": "react-scripts eject",
-    "heroku-postbuild": "npm run build"
+    "start": "node server.js"
   },
   "keywords": [],
   "aenesthor": "",
@@ -22,6 +17,7 @@
     "clarify": "^2.1.0",
     "cors": "^2.8.5",
     "express": "^4.17.3",
+    "heroku": "^7.59.2",
     "install": "^0.13.0",
     "knex": "^1.0.3",
     "npm-bundle": "^3.0.3",
