@@ -12,7 +12,9 @@ const image = require('./controllers/image')
 const db = knex({
   client: 'pg',
   connection: {
-    connectionString: process.env.DATABASE_URL || 'postgres://smartbrain',
+    connectionString:
+      process.env.DATABASE_URL ||
+      'postgres://zsdncmfhtjyrdd:574eb7fba95eee735e9a8489d18d2ef00823dcd98c3b757e08cc16dc03959509@ec2-3-219-204-29.compute-1.amazonaws.com:5432/de2i88qqbl79qv',
     ssl: {
       rejectUnauthorized: true,
     },
