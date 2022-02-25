@@ -1,23 +1,52 @@
 {
+<<<<<<< HEAD
   "name": "face-api",
+||||||| 87570d42
+  "name": "node",
+=======
+  "name": "smart-brain-api",
+>>>>>>> e4e2f40947c6970f62ba6e6eadc2095fc803700b
   "version": "1.0.0",
+<<<<<<< HEAD
   "engines": {
     "node": "16.14.0"
   },
   "description": "face detect api",
   "main": "index.js",
+||||||| 87570d42
+  "main": "server.js",
+=======
+  "main": "index.js",
+>>>>>>> e4e2f40947c6970f62ba6e6eadc2095fc803700b
   "scripts": {
     "start": "node server.js"
   },
   "keywords": [],
+<<<<<<< HEAD
   "build": "webpack",
   "author": "",
   "license": "MIT",
+||||||| 87570d42
+  "aenesthor": "",
+  "license": "ISC",
+=======
+  "aenesthor": "",
+  "license": "MIT",
+>>>>>>> e4e2f40947c6970f62ba6e6eadc2095fc803700b
   "dependencies": {
+<<<<<<< HEAD
     "bcrypt-nodejs": "^0.0.3",
+||||||| 87570d42
+    "@rails/webpacker": "^5.4.3",
+    "apt": "^0.0.2",
+    "bcrypt-nodejs": "0.0.3",
+=======
+    "bcrypt-nodejs": "0.0.3",
+>>>>>>> e4e2f40947c6970f62ba6e6eadc2095fc803700b
     "body-parser": "^1.19.0",
     "clarifai": "^2.9.1",
     "cors": "^2.8.5",
+<<<<<<< HEAD
     "express": "^4.17.1",
     "heroku": "^7.59.2",
     "knex": "^0.21.5",
@@ -25,4 +54,25 @@
     "pg": "^8.7.1",
     "tarn": "^3.0.2"
   }
+||||||| 87570d42
+    "express": "^4.17.3",
+    "install": "^0.13.0",
+    "knex": "^1.0.3",
+    "npm-bundle": "^3.0.3",
+    "pg": "^8.0.3",
+    "serve": "^13.0.2",
+    "systemd": "^0.4.0"
+  },
+  "description": ""
+=======
+    "express": "^4.17.3",
+    "heroku": "^7.59.2",
+    "install": "^0.13.0",
+    "knex": "^0.21.5",
+    "npm-bundle": "^3.0.3",
+    "pg": "^8.0.3",
+    "serve": "^13.0.2"
+  },
+  "description": ""
+>>>>>>> e4e2f40947c6970f62ba6e6eadc2095fc803700b
 }
