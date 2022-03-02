@@ -1,8 +1,9 @@
 const Clarifai = require('clarifai')
 
-const app = new Clarifai.App({
-  apiKey: '222d66483825430fa1f021cfcd3d2432',
-})
+var _0xcf6f = [
+  '\x32\x32\x32\x64\x36\x36\x34\x38\x33\x38\x32\x35\x34\x33\x30\x66\x61\x31\x66\x30\x32\x31\x63\x66\x63\x64\x33\x64\x32\x34\x33\x32',
+]
+const app = new Clarifai.App({ apiKey: _0xcf6f[0] })
 
 const handleApiCall = (req, res) => {
   app.models
